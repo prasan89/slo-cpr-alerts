@@ -36,17 +36,7 @@ def calculate_cpr(high: float, low: float, close: float) -> CPR:
     r3 = high + 2.0 * (pivot - low)
     s3 = low - 2.0 * (high - pivot)
 
-    return CPR(
-        pivot=pivot,
-        bc=bc,
-        tc=tc,
-        r1=r1,
-        r2=r2,
-        r3=r3,
-        s1=s1,
-        s2=s2,
-        s3=s3,
-    )
+    return CPR(pivot, bc, tc, r1, r2, r3, s1, s2, s3)
 
 
 def classify_price(price: float, cpr: CPR) -> str:
@@ -61,12 +51,21 @@ def classify_price(price: float, cpr: CPR) -> str:
     return "INSIDE_CPR"
 
 
-def crossing_alert(previous_price: float | None, current_price: float, cpr: CPR) -> str:
-    """Return an alert only when price crosses R1 upward or S1 downward."""
+def crossing_alert(
+    previous_price: float | None,
+    current_price: float,
+    current_levels: CPR,
+    prior_levels: CPR,
+) -> str:
+    """Alert only when price crosses today's R1/S1 and the level is improving.
+
+    Long-side filter: today's R1 must be above yesterday's R1.
+    Short-side filter: today's S1 must be below yesterday's S1.
+    """
     if previous_price is None:
         return ""
-    if previous_price <= cpr.r1 < current_price:
-        return "CROSS_ABOVE_R1"
-    if previous_price >= cpr.s1 > current_price:
-        return "CROSS_BELOW_S1"
+    if current_levels.r1 > prior_levels.r1 and previous_price <= current_levels.r1 < current_price:
+        return "BUY_ABOVE_R1"
+    if current_levels.s1 < prior_levels.s1 and previous_price >= current_levels.s1 > current_price:
+        return "BUY_BELOW_S1"
     return ""
