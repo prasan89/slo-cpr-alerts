@@ -3,8 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fyers_apiv3 import fyersModel
+
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 @dataclass(frozen=True)
@@ -46,8 +50,8 @@ class FyersDataProvider:
         return int(value.timestamp())
 
     def _history(self, symbol: str, session_date: date) -> OHLC | None:
-        start = datetime(session_date.year, session_date.month, session_date.day, 9, 15)
-        end = datetime(session_date.year, session_date.month, session_date.day, 15, 30)
+        start = datetime(session_date.year, session_date.month, session_date.day, 9, 15, tzinfo=IST)
+        end = datetime(session_date.year, session_date.month, session_date.day, 15, 30, tzinfo=IST)
         response = self.client.history(
             data={
                 "symbol": self._fyers_symbol(symbol),
