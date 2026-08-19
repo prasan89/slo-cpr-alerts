@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font
+
+
+HEADERS = [
+    "timestamp_ist", "symbol", "ltp", "pivot", "bc", "tc", "cpr_width_pct",
+    "state", "alert", "previous_state",
+]
+
+
+def append_snapshot(path: str | Path, row: dict) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        wb = load_workbook(path)
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "CPR Alerts"
+        ws.append(HEADERS)
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+
+    ws = wb["CPR Alerts"]
+    ws.append([row.get(h) for h in HEADERS])
+    ws.freeze_panes = "A2"
+    wb.save(path)
+
+
+def create_workbook(path: str | Path) -> None:
+    path = Path(path)
+    if path.exists():
+        return
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "CPR Alerts"
+    ws.append(HEADERS)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    wb.create_sheet("Latest Snapshot")
+    wb.create_sheet("CPR Levels")
+    wb.save(path)
