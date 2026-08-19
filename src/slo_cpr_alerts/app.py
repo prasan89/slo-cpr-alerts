@@ -10,6 +10,7 @@ from slo_cpr_alerts.excel import create_workbook, append_snapshot, append_signal
 from slo_cpr_alerts.market_hours import is_market_open, now_ist
 from slo_cpr_alerts.providers.fyers import FyersDataProvider
 from slo_cpr_alerts.signal_log import append_text_signal
+from slo_cpr_alerts.telegram import format_signals, send_signal
 
 
 class DataProvider:
@@ -126,7 +127,16 @@ class CPRMonitor:
                 append_signal(self.workbook, timestamp, symbol, "BUY PUT", price, min(levels.s1, prior_levels.s1))
             count += 1
 
+        append_text_signal(self.text_log, timestamp, calls, puts)
+
+        # Telegram is intentionally sent only when there is at least one new signal.
         if calls or puts:
+            message = format_signals(timestamp, calls, puts)
+            try:
+                send_signal(message)
+            except Exception as exc:
+                print(f"Telegram notification error: {type(exc).__name__}: {exc}")
+
             print(f"\n===== CPR SIGNALS {timestamp} IST =====")
             print(f"BUY CALL ({len(calls)}): {', '.join(calls) if calls else 'None'}")
             print(f"BUY PUT  ({len(puts)}): {', '.join(puts) if puts else 'None'}")
@@ -134,8 +144,6 @@ class CPRMonitor:
         else:
             print(f"[{timestamp} IST] No new CALL/PUT signals")
 
-        # Persistent plain-text report, grouped by every 5-minute checkpoint.
-        append_text_signal(self.text_log, timestamp, calls, puts)
         return count
 
     @staticmethod
@@ -197,4 +205,8 @@ def main() -> None:
     monitor = CPRMonitor(provider)
     print(f"FYERS CPR monitor started for {len(symbols)} symbols; frozen levels=09:15 IST; interval=5m")
     print(f"Excel: {monitor.workbook} | Text: {monitor.text_log}")
+    if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
+        print("Telegram notifications: ENABLED")
+    else:
+        print("Telegram notifications: DISABLED (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)")
     monitor.run_forever()
