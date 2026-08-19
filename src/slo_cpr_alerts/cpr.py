@@ -57,15 +57,20 @@ def crossing_alert(
     current_levels: CPR,
     prior_levels: CPR,
 ) -> str:
-    """Alert only when price crosses today's R1/S1 and the level is improving.
+    """Alert when price reaches the stronger of today's/yesterday's R1,
+    or the weaker of today's/yesterday's S1.
 
-    Long-side filter: today's R1 must be above yesterday's R1.
-    Short-side filter: today's S1 must be below yesterday's S1.
+    Long-side trigger: price touches/crosses max(today R1, yesterday R1).
+    Short-side trigger: price touches/crosses min(today S1, yesterday S1).
     """
     if previous_price is None:
         return ""
-    if current_levels.r1 > prior_levels.r1 and previous_price <= current_levels.r1 < current_price:
-        return "BUY_ABOVE_R1"
-    if current_levels.s1 < prior_levels.s1 and previous_price >= current_levels.s1 > current_price:
-        return "BUY_BELOW_S1"
+
+    buy_trigger = max(current_levels.r1, prior_levels.r1)
+    sell_trigger = min(current_levels.s1, prior_levels.s1)
+
+    if previous_price < buy_trigger <= current_price:
+        return "BUY_CALL_ABOVE_R1"
+    if previous_price > sell_trigger >= current_price:
+        return "BUY_PUT_BELOW_S1"
     return ""
