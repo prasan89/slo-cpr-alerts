@@ -15,11 +15,7 @@ class OHLC:
 
 
 class FyersDataProvider:
-    """Read-only FYERS v3 market-data adapter for CPR monitoring.
-
-    Uses FYERS History API for previous-session OHLC and Quotes API for LTP.
-    No order APIs are used.
-    """
+    """Read-only FYERS v3 market-data adapter for CPR monitoring."""
 
     def __init__(self, app_id: str, access_token: str, symbols: list[str]) -> None:
         if not app_id or not access_token:
@@ -72,25 +68,26 @@ class FyersDataProvider:
         close = float(candles[-1][4])
         return OHLC(high=max(highs), low=min(lows), close=close)
 
-    def previous_ohlc(self, symbol: str, session_date: date) -> OHLC | None:
-        # Walk backwards so weekends and exchange holidays do not break the
-        # monitor when the caller asks for the previous calendar day.
-        candidate = session_date
-        for _ in range(10):
+    def previous_sessions(self, symbol: str, before_date: date, count: int = 2) -> list[tuple[date, OHLC]]:
+        """Return the most recent completed sessions before a date, newest first."""
+        sessions: list[tuple[date, OHLC]] = []
+        candidate = before_date - timedelta(days=1)
+        for _ in range(15):
             result = self._history(symbol, candidate)
             if result is not None:
-                return result
+                sessions.append((candidate, result))
+                if len(sessions) >= count:
+                    break
             candidate -= timedelta(days=1)
-        return None
+        return sessions
+
+    def previous_ohlc(self, symbol: str, session_date: date) -> OHLC | None:
+        sessions = self.previous_sessions(symbol, session_date + timedelta(days=1), count=1)
+        return sessions[0][1] if sessions else None
 
     def previous_trading_ohlc(self, symbol: str, before_date: date) -> OHLC | None:
-        candidate = before_date - timedelta(days=1)
-        for _ in range(10):
-            result = self._history(symbol, candidate)
-            if result is not None:
-                return result
-            candidate -= timedelta(days=1)
-        return None
+        sessions = self.previous_sessions(symbol, before_date, count=1)
+        return sessions[0][1] if sessions else None
 
     def ltp(self, symbol: str) -> float:
         response = self.client.quotes(data={"symbols": self._fyers_symbol(symbol)})
