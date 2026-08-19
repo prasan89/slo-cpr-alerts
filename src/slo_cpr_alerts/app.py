@@ -47,7 +47,6 @@ class CPRMonitor:
             if len(sessions) < 2:
                 continue
 
-            # Newest completed session becomes today's CPR reference.
             current_session_date, current_ohlc = sessions[0]
             prior_session_date, prior_ohlc = sessions[1]
             levels = calculate_cpr(current_ohlc.high, current_ohlc.low, current_ohlc.close)
@@ -68,6 +67,9 @@ class CPRMonitor:
             self.initialize_levels(now.date())
 
         count = 0
+        calls: list[str] = []
+        puts: list[str] = []
+
         for symbol in self.provider.symbols():
             frozen = self.session_levels.get(symbol)
             if frozen is None:
@@ -111,9 +113,25 @@ class CPRMonitor:
                     "prior_session": prior_session_date.isoformat(),
                 },
             )
-            if alert:
-                print(f"[{now.isoformat()}] {symbol}: {alert} LTP={price:.2f}")
+
+            if alert == "BUY_CALL_ABOVE_R1":
+                calls.append(symbol)
+            elif alert == "BUY_PUT_BELOW_S1":
+                puts.append(symbol)
             count += 1
+
+        # Print one compact report for each 5-minute checkpoint.
+        # Only newly generated signals are listed; a stock is not repeated unless it
+        # crosses the trigger again after moving back across it.
+        timestamp = now.strftime("%H:%M")
+        if calls or puts:
+            print(f"\n===== CPR SIGNALS {timestamp} IST =====")
+            print(f"BUY CALL ({len(calls)}): {', '.join(calls) if calls else 'None'}")
+            print(f"BUY PUT  ({len(puts)}): {', '.join(puts) if puts else 'None'}")
+            print("=" * 38)
+        else:
+            print(f"[{timestamp} IST] No new CALL/PUT signals")
+
         return count
 
     @staticmethod
