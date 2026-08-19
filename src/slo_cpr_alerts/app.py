@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 from slo_cpr_alerts.cpr import calculate_cpr, classify_price, crossing_alert
@@ -17,10 +17,7 @@ class DataProvider:
     def symbols(self) -> list[str]:
         raise NotImplementedError
 
-    def previous_ohlc(self, symbol: str, session_date: date):
-        raise NotImplementedError
-
-    def previous_trading_ohlc(self, symbol: str, before_date: date):
+    def previous_sessions(self, symbol: str, before_date: date, count: int = 2):
         raise NotImplementedError
 
     def ltp(self, symbol: str) -> float:
@@ -39,20 +36,15 @@ class CPRMonitor:
         if not is_market_open(now):
             return 0
 
-        session_date = now.date()
         count = 0
-
         for symbol in self.provider.symbols():
-            # Latest completed trading session becomes today's CPR reference.
-            current_ohlc = self.provider.previous_trading_ohlc(symbol, session_date)
-            if not current_ohlc:
+            sessions = self.provider.previous_sessions(symbol, now.date(), count=2)
+            if len(sessions) < 2:
                 continue
 
-            # The adapter walks backwards across weekends/holidays.
-            current_reference_date = session_date - timedelta(days=1)
-            prior_ohlc = self.provider.previous_trading_ohlc(symbol, current_reference_date)
-            if not prior_ohlc:
-                continue
+            # sessions are newest first: [latest completed session, prior session].
+            current_session_date, current_ohlc = sessions[0]
+            prior_session_date, prior_ohlc = sessions[1]
 
             price = self.provider.ltp(symbol)
             if price <= 0:
@@ -89,6 +81,8 @@ class CPRMonitor:
                     "state": state,
                     "alert": alert,
                     "previous_ltp": previous_price or "",
+                    "reference_session": current_session_date.isoformat(),
+                    "prior_session": prior_session_date.isoformat(),
                 },
             )
             if alert:
