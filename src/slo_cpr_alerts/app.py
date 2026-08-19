@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 from slo_cpr_alerts.cpr import calculate_cpr, classify_price, crossing_alert
@@ -16,6 +16,11 @@ class DataProvider:
         raise NotImplementedError
 
     def previous_ohlc(self, symbol: str, session_date: date):
+        """Return OHLC for the specified trading session, or None."""
+        raise NotImplementedError
+
+    def previous_trading_ohlc(self, symbol: str, before_date: date):
+        """Return the most recent OHLC session strictly before before_date."""
         raise NotImplementedError
 
     def ltp(self, symbol: str) -> float:
@@ -26,8 +31,6 @@ class CPRMonitor:
     def __init__(self, provider: DataProvider, workbook: str | Path = "reports/cpr_alerts.xlsx") -> None:
         self.provider = provider
         self.workbook = Path(workbook)
-        # Keep the last observed price so alerts mean an actual crossing,
-        # rather than merely being above R1/below S1 on every 5-minute poll.
         self.previous_prices: dict[str, float] = {}
         create_workbook(self.workbook)
 
@@ -37,38 +40,53 @@ class CPRMonitor:
             return 0
 
         session_date = now.date()
-        previous_session = session_date - timedelta(days=1)
+        # Current levels come from the latest completed trading session.
+        current_ohlc_date = session_date - timedelta(days=1)
         count = 0
+
         for symbol in self.provider.symbols():
-            ohlc = self.provider.previous_ohlc(symbol, previous_session)
-            if not ohlc:
+            current_ohlc = self.provider.previous_ohlc(symbol, current_ohlc_date)
+            if not current_ohlc:
                 continue
+
+            # Prior levels are calculated from the trading session immediately
+            # before the session used for today's levels. This handles weekends
+            # and exchange holidays through the provider implementation.
+            prior_ohlc = self.provider.previous_trading_ohlc(symbol, current_ohlc_date)
+            if not prior_ohlc:
+                continue
+
             price = self.provider.ltp(symbol)
             if price <= 0:
                 continue
 
-            cpr = calculate_cpr(ohlc.high, ohlc.low, ohlc.close)
+            levels = calculate_cpr(current_ohlc.high, current_ohlc.low, current_ohlc.close)
+            prior_levels = calculate_cpr(prior_ohlc.high, prior_ohlc.low, prior_ohlc.close)
             previous_price = self.previous_prices.get(symbol)
-            state = classify_price(price, cpr)
-            alert = crossing_alert(previous_price, price, cpr)
+            state = classify_price(price, levels)
+            alert = crossing_alert(previous_price, price, levels, prior_levels)
             self.previous_prices[symbol] = price
 
-            width_pct = ((cpr.tc - cpr.bc) / cpr.pivot * 100.0) if cpr.pivot else 0.0
+            width_pct = ((levels.tc - levels.bc) / levels.pivot * 100.0) if levels.pivot else 0.0
             append_snapshot(
                 self.workbook,
                 {
                     "timestamp_ist": now.isoformat(),
                     "symbol": symbol,
                     "ltp": price,
-                    "r3": cpr.r3,
-                    "r2": cpr.r2,
-                    "r1": cpr.r1,
-                    "tc": cpr.tc,
-                    "pivot": cpr.pivot,
-                    "bc": cpr.bc,
-                    "s1": cpr.s1,
-                    "s2": cpr.s2,
-                    "s3": cpr.s3,
+                    "r3": levels.r3,
+                    "r2": levels.r2,
+                    "r1": levels.r1,
+                    "tc": levels.tc,
+                    "pivot": levels.pivot,
+                    "bc": levels.bc,
+                    "s1": levels.s1,
+                    "s2": levels.s2,
+                    "s3": levels.s3,
+                    "yesterday_r1": prior_levels.r1,
+                    "yesterday_s1": prior_levels.s1,
+                    "r1_improving": levels.r1 > prior_levels.r1,
+                    "s1_improving": levels.s1 < prior_levels.s1,
                     "cpr_width_pct": width_pct,
                     "state": state,
                     "alert": alert,
@@ -92,5 +110,6 @@ class CPRMonitor:
 def main() -> None:
     raise SystemExit(
         "Connect a real read-only DataProvider adapter before running. "
-        "The monitor will poll every 5 minutes and alert only on upward R1 or downward S1 crossings."
+        "The monitor polls every 5 minutes and alerts only when price crosses R1/S1 "
+        "and today's level improves versus the prior trading day's level."
     )
