@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from slo_cpr_alerts.cpr import calculate_cpr, classify_price, crossing_alert
@@ -25,33 +25,59 @@ class DataProvider:
 
 
 class CPRMonitor:
+    """Build CPR levels once at 09:15 IST, then monitor crossings every 5 minutes."""
+
     def __init__(self, provider: DataProvider, workbook: str | Path = "reports/cpr_alerts.xlsx") -> None:
         self.provider = provider
         self.workbook = Path(workbook)
         self.previous_prices: dict[str, float] = {}
+        self.session_levels: dict[str, tuple[object, object, date, date]] = {}
+        self.levels_date: date | None = None
         create_workbook(self.workbook)
+
+    def initialize_levels(self, trading_date: date | None = None) -> int:
+        """Fetch the two completed sessions and freeze today's CPR levels for the day."""
+        trading_date = trading_date or now_ist().date()
+        self.session_levels.clear()
+        self.previous_prices.clear()
+
+        count = 0
+        for symbol in self.provider.symbols():
+            sessions = self.provider.previous_sessions(symbol, trading_date, count=2)
+            if len(sessions) < 2:
+                continue
+
+            # Newest completed session becomes today's CPR reference.
+            current_session_date, current_ohlc = sessions[0]
+            prior_session_date, prior_ohlc = sessions[1]
+            levels = calculate_cpr(current_ohlc.high, current_ohlc.low, current_ohlc.close)
+            prior_levels = calculate_cpr(prior_ohlc.high, prior_ohlc.low, prior_ohlc.close)
+            self.session_levels[symbol] = (levels, prior_levels, current_session_date, prior_session_date)
+            count += 1
+
+        self.levels_date = trading_date
+        print(f"CPR levels frozen at 09:15 IST for {count}/{len(self.provider.symbols())} symbols")
+        return count
 
     def check_once(self) -> int:
         now = now_ist()
         if not is_market_open(now):
             return 0
 
+        if self.levels_date != now.date() or not self.session_levels:
+            self.initialize_levels(now.date())
+
         count = 0
         for symbol in self.provider.symbols():
-            sessions = self.provider.previous_sessions(symbol, now.date(), count=2)
-            if len(sessions) < 2:
+            frozen = self.session_levels.get(symbol)
+            if frozen is None:
                 continue
 
-            # sessions are newest first: [latest completed session, prior session].
-            current_session_date, current_ohlc = sessions[0]
-            prior_session_date, prior_ohlc = sessions[1]
-
+            levels, prior_levels, current_session_date, prior_session_date = frozen
             price = self.provider.ltp(symbol)
             if price <= 0:
                 continue
 
-            levels = calculate_cpr(current_ohlc.high, current_ohlc.low, current_ohlc.close)
-            prior_levels = calculate_cpr(prior_ohlc.high, prior_ohlc.low, prior_ohlc.close)
             previous_price = self.previous_prices.get(symbol)
             state = classify_price(price, levels)
             alert = crossing_alert(previous_price, price, levels, prior_levels)
@@ -90,13 +116,39 @@ class CPRMonitor:
             count += 1
         return count
 
-    def run_forever(self, interval_seconds: int = 300) -> None:
+    @staticmethod
+    def _next_five_minute(now: datetime) -> datetime:
+        base = now.replace(second=0, microsecond=0)
+        minutes = base.minute - (base.minute % 5) + 5
+        if minutes >= 60:
+            return base.replace(minute=0) + timedelta(hours=1)
+        return base.replace(minute=minutes)
+
+    def run_forever(self) -> None:
+        """Run exactly on 09:15, 09:20, ... through the 15:30 monitoring boundary."""
         while True:
+            now = now_ist()
+            if now.time() < datetime.strptime("09:15", "%H:%M").time():
+                target = now.replace(hour=9, minute=15, second=0, microsecond=0)
+                time.sleep(max(0.0, (target - now).total_seconds()))
+                continue
+
+            if now.time() > datetime.strptime("15:30", "%H:%M").time():
+                return
+
             try:
+                if self.levels_date != now.date():
+                    self.initialize_levels(now.date())
                 self.check_once()
             except Exception as exc:
                 print(f"CPR monitor error: {type(exc).__name__}: {exc}")
-            time.sleep(interval_seconds)
+
+            now = now_ist()
+            if now.time() >= datetime.strptime("15:30", "%H:%M").time():
+                return
+
+            target = self._next_five_minute(now)
+            time.sleep(max(0.0, (target - now).total_seconds()))
 
 
 def _symbols() -> list[str]:
@@ -121,5 +173,5 @@ def main() -> None:
 
     provider = FyersDataProvider(app_id, access_token, symbols)
     monitor = CPRMonitor(provider)
-    print(f"FYERS CPR monitor started for {len(symbols)} symbols; interval=300s")
-    monitor.run_forever(interval_seconds=300)
+    print(f"FYERS CPR monitor started for {len(symbols)} symbols; frozen levels=09:15 IST; interval=5m")
+    monitor.run_forever()
