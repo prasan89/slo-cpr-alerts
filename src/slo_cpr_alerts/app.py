@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from slo_cpr_alerts.cpr import calculate_cpr, classify_price, crossing_alert
-from slo_cpr_alerts.excel import create_workbook, append_snapshot
+from slo_cpr_alerts.excel import create_workbook, append_snapshot, append_signal
 from slo_cpr_alerts.market_hours import is_market_open, now_ist
 from slo_cpr_alerts.providers.fyers import FyersDataProvider
 
@@ -42,7 +42,8 @@ class CPRMonitor:
         self.previous_prices.clear()
 
         count = 0
-        for symbol in self.provider.symbols():
+        symbols = self.provider.symbols()
+        for symbol in symbols:
             sessions = self.provider.previous_sessions(symbol, trading_date, count=2)
             if len(sessions) < 2:
                 continue
@@ -55,7 +56,7 @@ class CPRMonitor:
             count += 1
 
         self.levels_date = trading_date
-        print(f"CPR levels frozen at 09:15 IST for {count}/{len(self.provider.symbols())} symbols")
+        print(f"CPR levels frozen at 09:15 IST for {count}/{len(symbols)} symbols")
         return count
 
     def check_once(self) -> int:
@@ -69,6 +70,7 @@ class CPRMonitor:
         count = 0
         calls: list[str] = []
         puts: list[str] = []
+        timestamp = now.strftime("%H:%M")
 
         for symbol in self.provider.symbols():
             frozen = self.session_levels.get(symbol)
@@ -116,14 +118,12 @@ class CPRMonitor:
 
             if alert == "BUY_CALL_ABOVE_R1":
                 calls.append(symbol)
+                append_signal(self.workbook, timestamp, symbol, "BUY CALL", price, max(levels.r1, prior_levels.r1))
             elif alert == "BUY_PUT_BELOW_S1":
                 puts.append(symbol)
+                append_signal(self.workbook, timestamp, symbol, "BUY PUT", price, min(levels.s1, prior_levels.s1))
             count += 1
 
-        # Print one compact report for each 5-minute checkpoint.
-        # Only newly generated signals are listed; a stock is not repeated unless it
-        # crosses the trigger again after moving back across it.
-        timestamp = now.strftime("%H:%M")
         if calls or puts:
             print(f"\n===== CPR SIGNALS {timestamp} IST =====")
             print(f"BUY CALL ({len(calls)}): {', '.join(calls) if calls else 'None'}")
