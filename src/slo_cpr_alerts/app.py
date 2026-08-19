@@ -9,6 +9,7 @@ from slo_cpr_alerts.cpr import calculate_cpr, classify_price, crossing_alert
 from slo_cpr_alerts.excel import create_workbook, append_snapshot, append_signal
 from slo_cpr_alerts.market_hours import is_market_open, now_ist
 from slo_cpr_alerts.providers.fyers import FyersDataProvider
+from slo_cpr_alerts.signal_log import append_text_signal
 
 
 class DataProvider:
@@ -27,9 +28,10 @@ class DataProvider:
 class CPRMonitor:
     """Build CPR levels once at 09:15 IST, then monitor crossings every 5 minutes."""
 
-    def __init__(self, provider: DataProvider, workbook: str | Path = "reports/cpr_alerts.xlsx") -> None:
+    def __init__(self, provider: DataProvider, workbook: str | Path = "reports/cpr_alerts.xlsx", text_log: str | Path = "reports/cpr_signals.txt") -> None:
         self.provider = provider
         self.workbook = Path(workbook)
+        self.text_log = Path(text_log)
         self.previous_prices: dict[str, float] = {}
         self.session_levels: dict[str, tuple[object, object, date, date]] = {}
         self.levels_date: date | None = None
@@ -132,6 +134,8 @@ class CPRMonitor:
         else:
             print(f"[{timestamp} IST] No new CALL/PUT signals")
 
+        # Persistent plain-text report, grouped by every 5-minute checkpoint.
+        append_text_signal(self.text_log, timestamp, calls, puts)
         return count
 
     @staticmethod
@@ -192,4 +196,5 @@ def main() -> None:
     provider = FyersDataProvider(app_id, access_token, symbols)
     monitor = CPRMonitor(provider)
     print(f"FYERS CPR monitor started for {len(symbols)} symbols; frozen levels=09:15 IST; interval=5m")
+    print(f"Excel: {monitor.workbook} | Text: {monitor.text_log}")
     monitor.run_forever()
