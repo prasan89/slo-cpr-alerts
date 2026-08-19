@@ -14,4 +14,4 @@ def now_ist() -> datetime:
 
 def is_market_open(value: datetime | None = None) -> bool:
     current = (value or now_ist()).astimezone(IST).time()
-    return OPEN <= current < CLOSE
+    return OPEN <= current <= CLOSE
