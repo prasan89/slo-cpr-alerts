@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
@@ -8,8 +7,8 @@ from openpyxl.styles import Font
 
 
 HEADERS = [
-    "timestamp_ist", "symbol", "ltp", "pivot", "bc", "tc", "cpr_width_pct",
-    "state", "alert", "previous_state",
+    "timestamp_ist", "symbol", "ltp", "r3", "r2", "r1", "tc", "pivot", "bc",
+    "s1", "s2", "s3", "cpr_width_pct", "state", "alert", "previous_ltp",
 ]
 
 
