@@ -8,7 +8,8 @@ from openpyxl.styles import Font
 
 HEADERS = [
     "timestamp_ist", "symbol", "ltp", "r3", "r2", "r1", "tc", "pivot", "bc",
-    "s1", "s2", "s3", "cpr_width_pct", "state", "alert", "previous_ltp",
+    "s1", "s2", "s3", "yesterday_r1", "yesterday_s1", "r1_improving", "s1_improving",
+    "cpr_width_pct", "state", "alert", "previous_ltp",
 ]
 
 
@@ -17,6 +18,14 @@ def append_snapshot(path: str | Path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         wb = load_workbook(path)
+        ws = wb["CPR Alerts"]
+        # Existing workbooks created by an earlier version are upgraded in place.
+        existing = [cell.value for cell in ws[1]]
+        if existing != HEADERS:
+            ws.delete_rows(1, ws.max_row)
+            ws.append(HEADERS)
+            for cell in ws[1]:
+                cell.font = Font(bold=True)
     else:
         wb = Workbook()
         ws = wb.active
