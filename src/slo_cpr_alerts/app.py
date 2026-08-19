@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from datetime import date, timedelta
 from pathlib import Path
@@ -7,20 +8,19 @@ from pathlib import Path
 from slo_cpr_alerts.cpr import calculate_cpr, classify_price, crossing_alert
 from slo_cpr_alerts.excel import create_workbook, append_snapshot
 from slo_cpr_alerts.market_hours import is_market_open, now_ist
+from slo_cpr_alerts.providers.fyers import FyersDataProvider
 
 
 class DataProvider:
-    """Interface placeholder for Upstox/FYERS/Groww adapters."""
+    """Interface for read-only market-data adapters."""
 
     def symbols(self) -> list[str]:
         raise NotImplementedError
 
     def previous_ohlc(self, symbol: str, session_date: date):
-        """Return OHLC for the specified trading session, or None."""
         raise NotImplementedError
 
     def previous_trading_ohlc(self, symbol: str, before_date: date):
-        """Return the most recent OHLC session strictly before before_date."""
         raise NotImplementedError
 
     def ltp(self, symbol: str) -> float:
@@ -40,19 +40,17 @@ class CPRMonitor:
             return 0
 
         session_date = now.date()
-        # Current levels come from the latest completed trading session.
-        current_ohlc_date = session_date - timedelta(days=1)
         count = 0
 
         for symbol in self.provider.symbols():
-            current_ohlc = self.provider.previous_ohlc(symbol, current_ohlc_date)
+            # Latest completed trading session becomes today's CPR reference.
+            current_ohlc = self.provider.previous_trading_ohlc(symbol, session_date)
             if not current_ohlc:
                 continue
 
-            # Prior levels are calculated from the trading session immediately
-            # before the session used for today's levels. This handles weekends
-            # and exchange holidays through the provider implementation.
-            prior_ohlc = self.provider.previous_trading_ohlc(symbol, current_ohlc_date)
+            # The adapter walks backwards across weekends/holidays.
+            current_reference_date = session_date - timedelta(days=1)
+            prior_ohlc = self.provider.previous_trading_ohlc(symbol, current_reference_date)
             if not prior_ohlc:
                 continue
 
@@ -107,9 +105,27 @@ class CPRMonitor:
             time.sleep(interval_seconds)
 
 
+def _symbols() -> list[str]:
+    raw = os.getenv("SLO_SYMBOLS", "NIFTY,BANKNIFTY").strip()
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 def main() -> None:
-    raise SystemExit(
-        "Connect a real read-only DataProvider adapter before running. "
-        "The monitor polls every 5 minutes and alerts only when price crosses R1/S1 "
-        "and today's level improves versus the prior trading day's level."
-    )
+    provider_name = os.getenv("SLO_DATA_PROVIDER", "fyers").lower()
+    symbols = _symbols()
+
+    if provider_name != "fyers":
+        raise SystemExit("Current CLI default is FYERS. Set SLO_DATA_PROVIDER=fyers.")
+
+    app_id = os.getenv("FYERS_APP_ID")
+    access_token = os.getenv("FYERS_ACCESS_TOKEN")
+    if not app_id or not access_token:
+        raise SystemExit(
+            "Missing FYERS_APP_ID or FYERS_ACCESS_TOKEN. "
+            "Run `fyers-auth` to generate a token locally."
+        )
+
+    provider = FyersDataProvider(app_id, access_token, symbols)
+    monitor = CPRMonitor(provider)
+    print(f"FYERS CPR monitor started for {len(symbols)} symbols; interval=300s")
+    monitor.run_forever(interval_seconds=300)
