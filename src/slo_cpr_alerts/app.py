@@ -10,7 +10,6 @@ from slo_cpr_alerts.excel import create_workbook, append_snapshot, append_signal
 from slo_cpr_alerts.market_hours import is_market_open, now_ist
 from slo_cpr_alerts.providers.fyers import FyersDataProvider
 from slo_cpr_alerts.signal_log import append_text_signal
-from slo_cpr_alerts.telegram import format_signals, send_signal
 
 
 class DataProvider:
@@ -34,20 +33,15 @@ class CPRMonitor:
 
     def initialize_levels(self, trading_date: date | None = None) -> int:
         trading_date = trading_date or now_ist().date()
-        self.session_levels.clear()
-        self.previous_prices.clear()
-        self.signaled_symbols.clear()
-        count = 0
-        symbols = self.provider.symbols()
+        self.session_levels.clear(); self.previous_prices.clear(); self.signaled_symbols.clear()
+        count = 0; symbols = self.provider.symbols()
         for symbol in symbols:
             sessions = self.provider.previous_sessions(symbol, trading_date, count=2)
             if len(sessions) < 2: continue
-            current_session_date, current_ohlc = sessions[0]
-            prior_session_date, prior_ohlc = sessions[1]
+            current_session_date, current_ohlc = sessions[0]; prior_session_date, prior_ohlc = sessions[1]
             levels = calculate_cpr(current_ohlc.high, current_ohlc.low, current_ohlc.close)
             prior_levels = calculate_cpr(prior_ohlc.high, prior_ohlc.low, prior_ohlc.close)
-            self.session_levels[symbol] = (levels, prior_levels, current_session_date, prior_session_date)
-            count += 1
+            self.session_levels[symbol] = (levels, prior_levels, current_session_date, prior_session_date); count += 1
         self.levels_date = trading_date
         print(f"CPR levels frozen at 09:15 IST for {count}/{len(symbols)} symbols")
         return count
@@ -63,8 +57,7 @@ class CPRMonitor:
             levels, prior_levels, current_session_date, prior_session_date = frozen
             price = self.provider.ltp(symbol)
             if price <= 0: continue
-            previous_price = self.previous_prices.get(symbol)
-            state = classify_price(price, levels)
+            previous_price = self.previous_prices.get(symbol); state = classify_price(price, levels)
             alert = None if symbol in self.signaled_symbols else crossing_alert(previous_price, price, levels, prior_levels)
             self.previous_prices[symbol] = price
             width_pct = ((levels.tc - levels.bc) / levels.pivot * 100.0) if levels.pivot else 0.0
@@ -75,12 +68,11 @@ class CPRMonitor:
                 puts.append(symbol); self.signaled_symbols.add(symbol); append_signal(self.workbook, timestamp, symbol, "BUY PUT", price, min(levels.s1, prior_levels.s1))
             count += 1
         append_text_signal(self.text_log, timestamp, calls, puts)
-        if calls or puts:
-            message = format_signals(timestamp, calls, puts)
-            try: send_signal(message)
-            except Exception as exc: print(f"Telegram notification error: {type(exc).__name__}: {exc}")
-            print(f"\n===== CPR SIGNALS {timestamp} IST =====\nBUY CALL ({len(calls)}): {', '.join(calls) if calls else 'None'}\nBUY PUT  ({len(puts)}): {', '.join(puts) if puts else 'None'}\n" + "=" * 38)
-        else: print(f"[{timestamp} IST] No new CALL/PUT signals")
+        print(f"\n===== CPR CHECK {timestamp} IST =====")
+        print(f"🟢 CALL: {', '.join(calls) if calls else 'None'}")
+        print(f"🔴 PUT : {', '.join(puts) if puts else 'None'}")
+        print(f"Stocks checked: {count}")
+        print("=" * 38)
         return count
 
     @staticmethod
@@ -114,5 +106,5 @@ def main() -> None:
     symbols = _symbols(); provider = FyersDataProvider(app_id, access_token, symbols); monitor = CPRMonitor(provider)
     print(f"FYERS CPR monitor started for {len(symbols)} symbols; frozen levels=09:15 IST; interval=5m")
     print(f"Excel: {monitor.workbook} | Text: {monitor.text_log}")
-    print("Telegram notifications: ENABLED" if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID") else "Telegram notifications: DISABLED (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)")
+    print("Telegram notifications: DISABLED — terminal output only")
     monitor.run_forever()
