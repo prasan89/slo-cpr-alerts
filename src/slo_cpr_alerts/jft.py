@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .providers.fyers import FyersDataProvider, OHLC, VolumeSnapshot
+from .providers.fyers import FyersDataProvider
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -13,18 +13,26 @@ class JFTLevels:
     open: float
     adr5: float
     adr10: float
-    r1: float
-    r2: float
-    s1: float
-    s2: float
+    r1: float   # DailyH1 = Open + ADR10/2 (inner resistance)
+    r2: float   # DailyH2 = Open + ADR5/2  (outer resistance)
+    s1: float   # DailyL1 = Open - ADR10/2 (inner support)
+    s2: float   # DailyL2 = Open - ADR5/2  (outer support)
 
 
 def calculate_jft(today_open: float, ranges: list[float]) -> JFTLevels:
+    """Exact daily JFT/DZones mathematics.
+
+    DailyH1 = Open + ADR10/2
+    DailyH2 = Open + ADR5/2
+    DailyL1 = Open - ADR10/2
+    DailyL2 = Open - ADR5/2
+
+    ``ranges`` must be ordered newest-first: D-1 ... D-10.
+    """
     if today_open <= 0 or len(ranges) < 10:
-        raise ValueError("JFT requires today's open and at least 10 prior daily ranges")
-    adr5 = sum(ranges[:5]) / 5.0
-    adr10 = sum(ranges[:10]) / 10.0
-    # JFT/DZones: inner boundary uses ADR10/2, outer boundary uses ADR5/2.
+        raise ValueError("JFT requires today's daily open and 10 prior daily ranges")
+    adr5 = sum(float(r) for r in ranges[:5]) / 5.0
+    adr10 = sum(float(r) for r in ranges[:10]) / 10.0
     r1 = today_open + adr10 / 2.0
     r2 = today_open + adr5 / 2.0
     s1 = today_open - adr10 / 2.0
@@ -42,31 +50,29 @@ def jft_signal(cmp: float, levels: JFTLevels, volume_ratio: float, min_volume_ra
     return ""
 
 
-def _daily_ranges(provider: FyersDataProvider, symbol: str, before_date: date) -> list[float]:
-    sessions = provider.previous_sessions(symbol, before_date, count=10)
-    if len(sessions) < 10:
-        return []
-    return [ohlc.high - ohlc.low for _, ohlc in sessions[:10]]
-
-
 def build_levels(provider: FyersDataProvider, symbol: str, trading_date: date) -> JFTLevels | None:
-    # Use today's opening price from the first completed/current 5m candle.
-    # The prior 10 completed trading sessions supply ADR5/ADR10.
-    now = datetime.now(IST)
-    if trading_date == now.date():
-        start = now.replace(hour=9, minute=15, second=0, microsecond=0)
-        response = provider.client.history(data={
-            "symbol": provider._fyers_symbol(symbol), "resolution": "5", "date_format": "0",
-            "range_from": int(start.timestamp()), "range_to": int(now.timestamp()), "cont_flag": "1"
-        })
-        candles = response.get("candles", []) if isinstance(response, dict) and response.get("s") == "ok" else []
-        if not candles:
-            return None
-        today_open = float(candles[0][1])
-    else:
+    """Build levels from FYERS daily OHLC, avoiding 5m-derived daily ranges.
+
+    This is important for matching TradingView's `security(..., 'D', ...)` JFT
+    calculation: today's actual daily OPEN plus the previous 10 completed daily
+    High-Low ranges. We never derive the daily open/ranges from intraday candles.
+    """
+    bars = provider.daily_bars(symbol, trading_date, count=11)
+    if len(bars) < 11:
         return None
-    ranges = _daily_ranges(provider, symbol, trading_date)
-    return calculate_jft(today_open, ranges) if len(ranges) >= 10 else None
+
+    # If today's daily bar exists, it supplies today's open. Otherwise the scan
+    # cannot produce a current-day JFT level without guessing the open.
+    today = next((b for b in bars if b.session_date == trading_date), None)
+    if today is None:
+        return None
+
+    previous = [b for b in bars if b.session_date < trading_date][:10]
+    if len(previous) < 10:
+        return None
+
+    ranges = [b.high - b.low for b in previous]
+    return calculate_jft(today.open, ranges)
 
 
 class JFTScanner:
@@ -80,12 +86,15 @@ class JFTScanner:
 
     def initialize(self, trading_date: date | None = None) -> int:
         trading_date = trading_date or datetime.now(IST).date()
-        self.levels.clear(); self.signaled.clear(); count = 0
+        self.levels.clear()
+        self.signaled.clear()
+        count = 0
         for symbol in self.provider.symbols():
             try:
                 level = build_levels(self.provider, symbol, trading_date)
                 if level:
-                    self.levels[symbol] = level; count += 1
+                    self.levels[symbol] = level
+                    count += 1
             except Exception as exc:
                 print(f"[JFT ERROR] {symbol}: {exc}")
         self.levels_date = trading_date
@@ -106,7 +115,17 @@ class JFTScanner:
                 if not signal or (symbol, signal) in self.signaled:
                     continue
                 self.signaled.add((symbol, signal))
-                alerts.append({"symbol": symbol, "signal": signal, "cmp": cmp, "r1": levels.r1, "r2": levels.r2, "s1": levels.s1, "s2": levels.s2, "volume_ratio": ratio, "time": now.isoformat()})
+                alerts.append({
+                    "symbol": symbol,
+                    "signal": signal,
+                    "cmp": cmp,
+                    "r1": levels.r1,
+                    "r2": levels.r2,
+                    "s1": levels.s1,
+                    "s2": levels.s2,
+                    "volume_ratio": ratio,
+                    "time": now.isoformat(),
+                })
             except Exception as exc:
                 print(f"[JFT ERROR] {symbol}: {exc}")
         for a in alerts:
@@ -118,7 +137,8 @@ class JFTScanner:
         while True:
             now = datetime.now(IST)
             if now.time().hour < 9 or (now.time().hour == 9 and now.time().minute < 15):
-                time.sleep(30); continue
+                time.sleep(30)
+                continue
             if now.time().hour > 15 or (now.time().hour == 15 and now.time().minute >= 31):
                 return
             self.scan_once()
