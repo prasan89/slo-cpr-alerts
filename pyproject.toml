@@ -1,7 +1,7 @@
 [project]
 name = "slo-cpr-alerts"
-version = "0.3.0"
-description = "Five-minute CPR monitoring and Excel alerting for NIFTY, BANKNIFTY and NSE F&O stocks"
+version = "0.4.0"
+description = "Five-minute CPR and JFT monitoring with volume-confirmed alerts for NSE symbols"
 requires-python = ">=3.11"
 dependencies = ["pandas>=2.2", "openpyxl>=3.1", "requests>=2.31", "growwapi>=1.5", "fyers-apiv3>=3.1"]
 
@@ -12,3 +12,4 @@ dev = ["pytest>=8"]
 slo-cpr = "slo_cpr_alerts.app:main"
 fyers-auth = "slo_cpr_alerts.fyers_auth:main"
 scan-today = "slo_cpr_alerts.scan_today:main"
+slo-jft = "slo_cpr_alerts.jft_cli:main"
