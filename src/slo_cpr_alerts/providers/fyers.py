@@ -8,6 +8,8 @@ IST=ZoneInfo("Asia/Kolkata")
 @dataclass(frozen=True)
 class OHLC: high: float; low: float; close: float
 @dataclass(frozen=True)
+class DailyBar: open: float; high: float; low: float; close: float; session_date: date
+@dataclass(frozen=True)
 class VolumeSnapshot:
     volume: float; average_volume: float; ratio: float; candle_time: datetime
 class FyersDataProvider:
@@ -30,6 +32,21 @@ class FyersDataProvider:
         candles=response.get("candles") or []
         if not candles: return None
         return OHLC(max(float(c[2]) for c in candles),min(float(c[3]) for c in candles),float(candles[-1][4]))
+    def daily_bars(self,symbol:str,before_or_on:date,count:int=11)->list[DailyBar]:
+        """Return completed daily bars, newest first, using FYERS daily OHLC directly."""
+        end=before_or_on
+        start=end-timedelta(days=max(20,count*3))
+        start_dt=datetime(start.year,start.month,start.day,0,0,tzinfo=IST); end_dt=datetime(end.year,end.month,end.day,23,59,tzinfo=IST)
+        response=self.client.history(data={"symbol":self._fyers_symbol(symbol),"resolution":"D","date_format":"0","range_from":self._epoch_seconds(start_dt),"range_to":self._epoch_seconds(end_dt),"cont_flag":"1"})
+        if not isinstance(response,dict) or response.get("s")!="ok": return []
+        bars=[]
+        for c in response.get("candles") or []:
+            if len(c)<5: continue
+            session=datetime.fromtimestamp(int(c[0]),tz=ZoneInfo("UTC")).astimezone(IST).date()
+            if session<=end:
+                bars.append(DailyBar(float(c[1]),float(c[2]),float(c[3]),float(c[4]),session))
+        bars.sort(key=lambda x:x.session_date,reverse=True)
+        return bars[:count]
     def previous_sessions(self,symbol:str,before_date:date,count:int=2)->list[tuple[date,OHLC]]:
         sessions=[]; candidate=before_date-timedelta(days=1)
         for _ in range(15):
